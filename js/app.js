@@ -163,14 +163,14 @@ P.inicio = () => {
 P.adjuntar = () => {
   if (S.leyendo) return `<div class="screen"><div class="body"><div class="hdr"><h3>Leyendo tu captura</h3></div>
     ${S.leyendo.url ? `<div class="shot"><img src="${S.leyendo.url}" alt="Captura que adjuntaste"></div>` : ""}
-    <div class="reading"><div class="spinner" aria-hidden="true"></div><b>${S.leyendo.ia ? "Leyendo con IA…" : "Leyendo monto, fecha y comercio…"}</b><span class="muted" style="font-size:13px">${S.leyendo.ia ? "Suele tardar unos segundos." : "Se lee gratis en tu celular. La primera vez descarga el lector (unos segundos más)."}</span></div></div></div>`;
+    <div class="reading"><div class="spinner" aria-hidden="true"></div><b>${S.leyendo.msg || (S.leyendo.ia ? "Leyendo con IA…" : "Leyendo monto, fecha y comercio…")}</b><span class="muted" style="font-size:13px">${S.leyendo.ia ? "Suele tardar unos segundos." : "Se lee gratis en tu celular. La primera vez descarga el lector (unos segundos más)."}</span></div></div></div>`;
   const pre = S.preset;
   const titulo = pre?.clase === "pago_tarjeta" ? "Pago de tarjeta" : pre?.clase === "saldo_pareja" ? "Pago entre ustedes" : "Adjuntar captura";
   return `<div class="screen"><div class="body">
     <div class="hdr">${atras(pre?.volver || "inicio")}<h3 style="flex:1">${titulo}</h3></div>
     <label class="drop" data-drop for="f-galeria">
-      <div class="big-ic">${ic("i-image")}</div><b>Sube o pega tu captura</b>
-      <p>Leemos el monto, la fecha, el comercio y el medio de pago. Tú revisas antes de guardar.</p>
+      <div class="big-ic">${ic("i-image")}</div><b>Sube o pega tus capturas</b>
+      <p>Puedes elegir <b>varias a la vez</b>, por ejemplo las pantallas de un listado. Leemos monto, fecha y comercio, y tú revisas antes de guardar.</p>
       <p style="font-size:12.5px">En computadora: <span class="kbd">Ctrl</span> + <span class="kbd">V</span> o arrastra la imagen</p>
     </label>
     <div class="src">
@@ -178,7 +178,7 @@ P.adjuntar = () => {
       <label for="f-camara">${ic("i-camera")}Cámara</label>
       <button type="button" data-act="manual">${ic("i-pencil")}A mano</button>
     </div>
-    <input id="f-galeria" type="file" accept="image/*" hidden data-file>
+    <input id="f-galeria" type="file" accept="image/*" multiple hidden data-file>
     <input id="f-camara" type="file" accept="image/*" capture="environment" hidden data-file>
     <div><div class="lbl" style="margin-bottom:8px">Funciona con</div>
       <div class="supported"><span>Yape</span><span>Plin</span><span>Transferencias</span><span>Boletas y facturas</span><span>Recibos de luz y agua</span><span>Vouchers de tarjeta</span><span>Estados de cuenta</span></div></div>
@@ -561,6 +561,27 @@ function itemsDesdePreset(base) {
   return { ...base, clase: p.clase, tipo: "gasto", tarjeta_id: p.tarjeta_id || base.tarjeta_id, pagado_por: p.pagado_por || base.pagado_por, duenio: p.pagado_por || base.duenio,
     monto: base.monto || p.monto || "", comercio: base.comercio || p.comercio || "", categoria: "otros", alcance: "propio" };
 }
+async function procesarVarios(files) {
+  const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+  if (!imgs.length) { toast("Elige imágenes (capturas o fotos)."); return; }
+  if (imgs.length === 1) return procesarArchivo(imgs[0]);
+  const MAX = 12; if (imgs.length > MAX) { toast(`Se leerán las primeras ${MAX} imágenes.`); imgs.length = MAX; }
+  let primera = null; const todos = []; let sinLeer = 0;
+  for (let i = 0; i < imgs.length; i++) {
+    let prep; try { prep = await prepararImagen(imgs[i]); } catch { sinLeer++; continue; }
+    primera ||= prep;
+    S.leyendo = { url: primera.url, msg: `Leyendo imagen ${i + 1} de ${imgs.length}…` }; if (S.ruta !== "adjuntar") ir("adjuntar"); else render();
+    try { const r = await leerLocal(prep.blob, C.hoyISO()); if (r.legible) todos.push(...r.movimientos); else sinLeer++; } catch { sinLeer++; }
+  }
+  S.leyendo = false;
+  const visto = new Set(), unicos = [];
+  for (const m of todos) { const k = [m.fecha, C.r2(m.monto), (m.comercio || "").toLowerCase().replace(/[^a-z0-9]/g, ""), m.n_operacion || ""].join("|"); if (!visto.has(k)) { visto.add(k); unicos.push(m); } }
+  const repetidos = todos.length - unicos.length;
+  if (!unicos.length) { armarBorrador(null, "No pudimos leer ninguna de las imágenes. Ingresa los datos a mano.", primera || { blob: null, url: null, b64: null }); return; }
+  const res = { legible: true, tipo_documento: "estado_de_cuenta", movimientos: unicos,
+    aviso: `Leímos ${imgs.length - sinLeer} de ${imgs.length} imágenes y encontramos ${unicos.length} movimientos${repetidos ? ` (quitamos ${repetidos} repetidos)` : ""}.${sinLeer ? ` ${sinLeer} imagen${sinLeer === 1 ? "" : "es"} no se pudo leer.` : ""}` };
+  armarBorrador(res, null, { blob: primera.blob, url: primera.url, b64: null });
+}
 async function procesarArchivo(file) {
   if (!file || !file.type.startsWith("image/")) { toast("Elige una imagen (captura o foto)."); return; }
   let prep;
@@ -870,7 +891,7 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "f-monto") pintarReparto();
 });
 document.addEventListener("change", (e) => {
-  if (e.target.matches("[data-file]")) { procesarArchivo(e.target.files[0]); e.target.value = ""; }
+  if (e.target.matches("[data-file]")) { const fs = [...e.target.files]; e.target.value = ""; procesarVarios(fs); }
   if (e.target.matches("[data-lote-cat]")) { S.lote.items[+e.target.dataset.loteCat].categoria = e.target.value; }
   if (e.target.matches("[data-lote-tj]")) { S.lote.tarjeta_id = e.target.value; }
   if (e.target.matches("[data-medio]")) { const w = document.querySelector("[data-tarjeta]"); if (w) w.hidden = e.target.value !== "Tarjeta de crédito"; }
@@ -878,11 +899,11 @@ document.addEventListener("change", (e) => {
 document.addEventListener("paste", (e) => {
   if (!S.hogar || document.querySelector(".sheet")) return;
   const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
-  if (item) { e.preventDefault(); procesarArchivo(item.getAsFile()); }
+  if (item) { e.preventDefault(); procesarVarios([...e.clipboardData.items].filter((i) => i.type.startsWith("image/")).map((i) => i.getAsFile())); }
 });
 document.addEventListener("dragover", (e) => { const d = e.target.closest?.("[data-drop]"); if (d) { e.preventDefault(); d.classList.add("over"); } });
 document.addEventListener("dragleave", (e) => e.target.closest?.("[data-drop]")?.classList.remove("over"));
-document.addEventListener("drop", (e) => { if (e.target.closest?.("[data-drop]")) { e.preventDefault(); procesarArchivo(e.dataTransfer.files[0]); } });
+document.addEventListener("drop", (e) => { if (e.target.closest?.("[data-drop]")) { e.preventDefault(); procesarVarios(e.dataTransfer.files); } });
 document.addEventListener("submit", async (e) => {
   const f = e.target.dataset.form; if (!f) return; e.preventDefault();
   const datos = Object.fromEntries(new FormData(e.target)); S.error = "";
