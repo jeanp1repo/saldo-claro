@@ -80,11 +80,15 @@ function etiquetaClase(m) {
   if (m.clase === "aporte_meta") return "Aporte a meta";
   return cat(m.categoria).n;
 }
+S.seleccion = null; // Set de ids mientras está activo el modo "Seleccionar"
 function txRow(m) {
+  const on = S.seleccion?.has(m.id);
+  const marca = S.seleccion ? `<span class="sel-box ${on ? "on" : ""}">${ic("i-check")}</span>` : "";
+  const attr = S.seleccion ? `data-act="toggle-sel" data-id="${m.id}" aria-pressed="${!!on}"` : `data-act="ver" data-id="${m.id}"`;
   const k = m.clase === "normal" ? cat(m.categoria) : { i: m.clase === "pago_tarjeta" ? "i-card" : m.clase === "aporte_meta" ? "i-target" : "i-swap", c: "--brand" };
   const tj = m.tarjeta_id ? S.d.tarjetas.find((t) => t.id === m.tarjeta_id) : null;
   const medio = tj ? `${tj.nombre} ••${tj.ultimos4}` : m.medio;
-  return `<button class="tx" type="button" data-act="ver" data-id="${m.id}">
+  return `<button class="tx" type="button" ${attr}>${marca}
     <span class="cat-ic" style="--c:var(${k.c})">${ic(k.i)}${badgeQuien(m)}</span>
     <span class="mid"><b>${esc(m.comercio || etiquetaClase(m))}</b><small>${m.privado ? `<span class="lock">${ic("i-lock")}Solo tú</span> ·` : ""} ${esc(etiquetaClase(m))} · ${esc(medio)}${m.captura_path ? ` <span class="clip" aria-label="con captura">${ic("i-clip")}</span>` : ""}</small></span>
     <span class="amt num ${m.tipo === "ingreso" ? "in" : ""}">${C.soles(m.tipo === "ingreso" ? m.monto : -m.monto, true)}</span></button>`;
@@ -300,6 +304,11 @@ P.movimientos = () => {
     <div class="chips">${C.CATS_GASTO.map((k) => chip("cat", k, `<span class="dot"></span>${cat(k).n}`, f.cats.has(k), `style="--c:var(${cat(k).c})"`)).join("")}
       ${["Yape", "Plin", "Transferencia", "Tarjeta", "Efectivo"].map((m) => chip("medio", m, m, f.medios.has(m))).join("")}</div>
     <div class="totals"><div><span>Ingresos</span><b class="num" style="color:var(--income)">+ ${C.soles(ing)}</b></div><div><span>Gastos</span><b class="num">− ${C.soles(gas)}</b></div></div>
+    ${S.seleccion
+      ? `<div class="sel-bar"><button class="secondary" type="button" data-act="sel-cancelar">Cancelar</button>
+          <button class="chip" type="button" data-act="sel-todos">Marcar todos (${movs.length})</button>
+          <button class="danger" type="button" data-act="sel-borrar" ${S.seleccion.size ? "" : "disabled"} style="width:auto;padding:10px 14px;min-height:44px">${ic("i-trash")}Eliminar ${S.seleccion.size}</button></div>`
+      : `<div class="chips"><button class="chip" type="button" data-act="sel-activar">${ic("i-check", 'style="width:15px;height:15px"')}Seleccionar para eliminar</button></div>`}
     <div>${listaAgrupada(movs)}</div>
   </div>${tabbar()}</div>`;
 };
@@ -337,29 +346,51 @@ P.detalle = () => {
 
 P.estadisticas = () => {
   const yo = S.yo.user_id, modo = S.pareja ? S.statsModo : "mio";
-  const pc = C.porCategoria(visibles(), S.mes, modo, yo, S.rep);
-  const prev = C.porCategoria(visibles(), C.mesAnterior(S.mes), modo, yo, S.rep);
+  const movs = visibles(), ant = C.mesAnterior(S.mes);
+  const pc = C.porCategoria(movs, S.mes, modo, yo, S.rep);
+  const prev = C.porCategoria(movs, ant, modo, yo, S.rep);
   const prevDe = Object.fromEntries(prev.filas.map((f) => [f.cat, f.monto]));
   const limite = modo === "hogar" ? S.d.presupuestos.reduce((s, p) => s + +p.monto, 0) : Number(S.yo.presupuesto_personal);
-  let acc = 0;
-  const grad = pc.filas.map((f) => { const a = acc; acc += f.pct * 100; return `var(${cat(f.cat).c}) ${a}% ${acc}%`; }).join(",");
-  const dias = C.porDia(visibles(), S.mes, modo, yo, S.rep), mx = Math.max(...dias, 0);
-  const imx = dias.indexOf(mx), dm = dias.length;
+  const dias = C.porDia(movs, S.mes, modo, yo, S.rep), mx = Math.max(...dias, 0), dm = dias.length;
+  const nomMes = C.nombreMes(S.mes, true), nomAnt = C.nombreMes(ant, true);
+  const dif = C.r2(pc.total - prev.total);
+  const comparacion = !prev.total ? `No hay gastos en ${nomAnt} para comparar.`
+    : dif === 0 ? `Igual que en ${nomAnt}.`
+    : `<b style="color:var(--${dif > 0 ? "expense" : "income"})">${C.soles(Math.abs(dif))} ${dif > 0 ? "más" : "menos"}</b> que en ${nomAnt}.`;
+  const top = pc.filas[0];
+  // semanas del mes
+  const rangos = [[1, 7], [8, 14], [15, 21], [22, 28], ...(dm > 28 ? [[29, dm]] : [])];
+  const semanas = rangos.map(([a, b]) => ({ a, b, v: C.r2(dias.slice(a - 1, b).reduce((s, x) => s + x, 0)) }));
+  const mxS = Math.max(...semanas.map((s) => s.v), 0);
+  const topGastos = C.delMes(movs, S.mes).filter((m) => m.clase === "normal" && m.tipo === "gasto" && (modo === "hogar" ? m.alcance === "compartido" : C.parteDe(m, yo, S.rep) > 0))
+    .sort((a, b) => b.monto - a.monto).slice(0, 5);
+  const colores = pc.filas.map((f) => `<i style="width:${(f.pct * 100).toFixed(2)}%;background:var(${cat(f.cat).c})"></i>`).join("");
   return `<div class="screen"><div class="body">
     <div class="hdr"><h3>Resumen</h3>${selMes()}</div>
     ${S.pareja ? `<div class="chips"><button class="chip" type="button" aria-pressed="${modo === "mio"}" data-act="stats" data-v="mio">Mis gastos</button><button class="chip" type="button" aria-pressed="${modo === "hogar"}" data-act="stats" data-v="hogar">Gastos de la casa</button></div>` : ""}
-    ${pc.total ? `<div class="card donut-wrap">
-      <div class="donut" style="background:conic-gradient(${grad})" role="img" aria-label="Gastos por categoría: ${pc.filas.map((f) => `${cat(f.cat).n} ${Math.round(f.pct * 100)}%`).join(", ")}">
-        <div><span><small>Gastado</small><br><b class="num">${C.solesCorto(pc.total)}</b>${limite ? `<br><small>de ${C.solesCorto(limite)}</small>` : ""}</span></div></div>
-      <div class="legend">${pc.filas.map((f) => `<div style="--c:var(${cat(f.cat).c})"><i></i><span>${cat(f.cat).n}</span><b class="num">${Math.round(f.pct * 100)}%</b></div>`).join("")}</div></div>
-    <div class="card cat-rows"><div class="sec-h"><h4>Por categoría</h4><span class="muted" style="font-size:12.5px">vs. ${C.nombreMes(C.mesAnterior(S.mes), true)}</span></div>
-      ${pc.filas.map((f) => { const p = prevDe[f.cat]; const d = p ? Math.round(((f.monto - p) / p) * 100) : null;
-        return `<div class="cat-row" style="--c:var(${cat(f.cat).c})"><span class="cat-ic">${ic(cat(f.cat).i)}</span><div><div class="t"><b>${cat(f.cat).n}</b><span class="num">${C.soles(f.monto)}</span></div><div class="bar"><i style="width:${(f.monto / pc.filas[0].monto) * 100}%"></i></div>
-          <small>${f.n} movimiento${f.n === 1 ? "" : "s"}${d !== null ? ` · <span class="delta ${d > 0 ? "up" : "down"}">${d > 0 ? "+" : ""}${d}%</span>` : " · nuevo este mes"}</small></div></div>`; }).join("")}</div>
-    <div class="card"><div class="sec-h"><h4>Gasto por día</h4><span class="muted num" style="font-size:12.5px">Mayor: ${imx + 1} ${C.nombreMes(S.mes).split(" ")[0].toLowerCase()} · ${C.solesCorto(mx)}</span></div>
-      <div class="daily">${dias.map((v, i) => `<i class="${v === mx && mx > 0 ? "max" : ""}" style="height:${mx ? Math.max(2, (v / mx) * 100) : 2}%" title="${i + 1}: ${C.soles(v)}"></i>`).join("")}</div>
-      <div class="daily-ax"><span>1</span><span>${Math.round(dm / 3)}</span><span>${Math.round((dm * 2) / 3)}</span><span>${dm}</span></div></div>`
-    : `<div class="card empty">${ic("i-chart")}<span>No hay gastos en ${C.nombreMes(S.mes, true)}.</span></div>`}
+    ${pc.total ? `
+    <div class="card sum-hero">
+      <div class="lbl">${modo === "hogar" ? "La casa gastó" : "Gastaste"} en ${nomMes}</div>
+      <div class="sum-big num">${C.soles(pc.total)}</div>
+      <div class="sum-line">${comparacion}</div>
+      <div class="sum-stack" role="img" aria-label="Reparto del gasto por categoría">${colores}</div>
+      ${top ? `<div class="sum-line">Lo que más pesa es <b>${cat(top.cat).n}</b>: ${Math.round(top.pct * 100)}% de tus gastos.</div>` : ""}
+      ${limite > 0 ? `<div class="bar ${pc.total > limite ? "warnb" : ""}" style="margin-top:4px"><i style="width:${Math.min(100, (pc.total / limite) * 100)}%"></i></div>
+        <div class="sum-line" style="margin-top:-4px">${pc.total > limite ? `Te pasaste del presupuesto por <b style="color:var(--expense)">${C.soles(pc.total - limite)}</b>.` : `Te quedan <b>${C.soles(limite - pc.total)}</b> de tu presupuesto de ${C.solesCorto(limite)}.`}</div>` : ""}
+    </div>
+    <div class="card cat-rows">
+      <div class="sec-h"><h4>¿En qué se fue tu dinero?</h4><span class="muted" style="font-size:12.5px">Toca para ver los gastos</span></div>
+      ${pc.filas.map((f) => { const p = prevDe[f.cat], d = p ? C.r2(f.monto - p) : null;
+        return `<button class="cat-row sum-cat" type="button" data-act="stat-cat" data-v="${f.cat}" style="--c:var(${cat(f.cat).c})">
+          <span class="cat-ic">${ic(cat(f.cat).i)}</span>
+          <span style="min-width:0"><span class="t"><b>${cat(f.cat).n}</b><span class="num"><b>${C.soles(f.monto)}</b> <span class="pct">${Math.round(f.pct * 100)}%</span></span></span>
+            <span class="bar" style="display:block"><i style="width:${(f.monto / pc.filas[0].monto) * 100}%"></i></span>
+            <small>${f.n} gasto${f.n === 1 ? "" : "s"}${d === null ? " · nuevo este mes" : d === 0 ? " · igual que antes" : ` · <span class="delta ${d > 0 ? "up" : "down"}">${d > 0 ? "subió" : "bajó"} ${C.soles(Math.abs(d))}</span> vs. ${nomAnt}`}</small></span></button>`; }).join("")}</div>
+    ${topGastos.length ? `<div><div class="sec-h" style="margin-bottom:2px"><h4>Tus ${topGastos.length} gastos más grandes</h4></div>${topGastos.map(txRow).join("")}</div>` : ""}
+    <div class="card"><div class="sec-h"><h4>Semana a semana</h4><span class="muted" style="font-size:12.5px">${mx > 0 ? `Día más caro: el ${dias.indexOf(mx) + 1} (${C.solesCorto(mx)})` : ""}</span></div>
+      <div class="weeks">${semanas.map((s) => `<div class="week"><span class="num wv">${s.v ? C.solesCorto(s.v) : "—"}</span><i class="${s.v === mxS && mxS > 0 ? "max" : ""}" style="height:${mxS ? Math.max(4, (s.v / mxS) * 100) : 4}%"></i><span class="wl">${s.a}–${s.b}</span></div>`).join("")}</div>
+      <small class="muted">Cuánto gastaste en cada grupo de días de ${nomMes}.</small></div>`
+    : `<div class="card empty">${ic("i-chart")}<span>No hay gastos en ${nomMes}.</span></div>`}
   </div>${tabbar()}</div>`;
 };
 
@@ -663,6 +694,29 @@ A.filtro = (el) => {
 };
 A.stats = (el) => { S.statsModo = el.dataset.v; render(); };
 A["leer-ia"] = () => leerConIA();
+A["sel-activar"] = () => { S.seleccion = new Set(); render(); };
+A["sel-cancelar"] = () => { S.seleccion = null; render(); };
+A["toggle-sel"] = (el) => { const id = el.dataset.id; S.seleccion.has(id) ? S.seleccion.delete(id) : S.seleccion.add(id); render(); };
+A["sel-todos"] = () => { const ids = C.delMes(visibles(), S.mes).map((m) => m.id); const todos = ids.every((id) => S.seleccion.has(id)); S.seleccion = todos ? new Set() : new Set(ids); render(); };
+A["sel-borrar"] = (el) => {
+  const ids = [...S.seleccion]; if (!ids.length) return;
+  el.closest(".sel-bar").insertAdjacentHTML("afterend", `<div class="confirm" style="margin-bottom:4px"><p>¿Eliminar ${ids.length} movimiento${ids.length === 1 ? "" : "s"}? Se quitan de tus cuentas y de los resúmenes. No se puede deshacer.</p>
+    <div class="row2"><button class="no" type="button" data-act="sel-no">Cancelar</button><button class="yes" type="button" data-act="sel-si">Eliminar</button></div></div>`);
+  el.disabled = true;
+};
+A["sel-no"] = () => render();
+A["sel-si"] = async (el) => {
+  const ids = [...S.seleccion]; el.disabled = true; let hechos = 0;
+  try {
+    for (const id of ids) {
+      const m = S.d.movimientos.find((x) => x.id === id);
+      await api.borrar("movimientos", id);
+      if (m?.captura_path) await api.borrarCaptura(m.captura_path).catch(() => {});
+      S.d.movimientos = S.d.movimientos.filter((x) => x.id !== id); hechos++;
+    }
+    S.seleccion = null; toast(`${hechos} movimiento${hechos === 1 ? "" : "s"} eliminado${hechos === 1 ? "" : "s"}`); render();
+  } catch (e) { S.seleccion = new Set(ids.slice(hechos)); toast(`Se eliminaron ${hechos}. Falló uno: ${e.message}`); render(); }
+};
 A["lote-ia"] = async () => {
   const L = S.lote; if (!L?.b64) return;
   S.leyendo = { url: L.imagenUrl, ia: true }; ir("adjuntar");

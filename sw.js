@@ -1,6 +1,6 @@
 // Saldo Claro · service worker: deja abrir la app sin internet con la última versión vista.
 // Sube VERSION cada vez que cambies archivos de la app.
-const VERSION = "saldo-claro-v7";
+const VERSION = "saldo-claro-v8";
 const ESTATICOS = ["./", "index.html", "styles.css", "manifest.webmanifest", "js/app.js", "js/data.js", "js/calc.js", "js/config.js", "js/ocr.js",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
