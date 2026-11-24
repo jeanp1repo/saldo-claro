@@ -40,6 +40,10 @@ svg.i{width:20px;height:20px;flex:none;stroke:currentColor;fill:none;stroke-widt
 .screen{flex:1;min-height:0;display:flex;flex-direction:column}
 .body{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;gap:16px;
   padding:calc(env(safe-area-inset-top,0px) + 14px) max(18px,env(safe-area-inset-right,0px)) 24px max(18px,env(safe-area-inset-left,0px))}
+.body>*{flex-shrink:0}
+.lote-name{border:0;background:none;outline:none;font-weight:700;font-size:14.5px;width:100%;min-width:0;padding:0;color:var(--ink);text-overflow:ellipsis}
+.lote-name:focus{border-bottom:1px solid var(--brand)}
+.primary{white-space:nowrap}
 .hdr{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .hdr h3{font-family:var(--f-display);font-size:23px;margin:0;letter-spacing:-.01em;line-height:1.15}
 .hdr .sub{font-size:13px;color:var(--muted)}

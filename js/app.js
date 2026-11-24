@@ -7,7 +7,7 @@ const $app = document.getElementById("app");
 const S = {
   sesion: null, hogar: null, miembros: [], yo: null, pareja: null, rep: {},
   d: { movimientos: [], tarjetas: [], cuotas: [], metas: [], presupuestos: [], pagos_fijos: [], cierres: [] },
-  ruta: "inicio", mes: C.mesActual(), sel: null, borrador: null, leyendo: false,
+  ruta: "inicio", mes: C.mesActual(), sel: null, borrador: null, lote: null, leyendo: false,
   filtros: { texto: "", tipo: "todos", cats: new Set(), medios: new Set(), conCaptura: false },
   statsModo: "mio", loginModo: "entrar", error: "", listo: false,
 };
@@ -58,7 +58,7 @@ async function recargar() { const p = await api.perfil(S.sesion.userId); S.hogar
 
 /* ---------------- piezas ---------------- */
 const TABS = [["inicio", "i-home", "Inicio"], ["movimientos", "i-list", "Movimientos"], ["adjuntar", "i-plus", "Adjuntar"], ["pareja", "i-users", "Hogar"], ["estadisticas", "i-chart", "Resumen"]];
-const TAB_DE = { inicio: "inicio", movimientos: "movimientos", detalle: "movimientos", pareja: "pareja", cierre: "pareja", estadisticas: "estadisticas", tarjetas: "inicio", ajustes: "inicio" };
+const TAB_DE = { lote: "inicio", inicio: "inicio", movimientos: "movimientos", detalle: "movimientos", pareja: "pareja", cierre: "pareja", estadisticas: "estadisticas", tarjetas: "inicio", ajustes: "inicio" };
 function tabbar() {
   const act = TAB_DE[S.ruta];
   return `<nav class="tabbar" aria-label="Navegación">${TABS.map(([id, i, lb]) => id === "adjuntar"
@@ -249,6 +249,36 @@ function pintarReparto() {
     <span class="muted" style="margin-left:auto">${C.pctTexto(S.rep[a.user_id])}/${C.pctTexto(S.rep[b.user_id])}</span></div>
     <div class="split-line" style="margin-top:6px"><span class="muted">Pagó:</span>${S.miembros.map((m) => `<button class="chip" type="button" aria-pressed="${it.pagado_por === m.user_id}" data-pick="pagado_por" data-v="${m.user_id}">${esc(m.user_id === S.yo.user_id ? "Yo" : m.nombre)}</button>`).join("")}</div>`;
 }
+
+P.lote = () => {
+  const L = S.lote; if (!L) return P.adjuntar();
+  const sel = L.items.filter((x) => x.sel), total = sel.filter((x) => x.clase !== "pago_tarjeta").reduce((s, x) => s + (x.tipo === "ingreso" ? -x.monto : x.monto), 0);
+  const tjs = S.d.tarjetas, credito = L.items.some((x) => x.medio === "Tarjeta de crédito");
+  const dias = [...new Set(L.items.map((x) => x.fecha))];
+  return `<div class="screen"><div class="body">
+    <div class="hdr">${atras("adjuntar")}<div style="flex:1"><h3>${L.items.length} movimientos</h3><div class="sub">Marca los que quieres guardar</div></div></div>
+    ${L.aviso ? `<div class="read-ok">${ic("i-check")}<span>${esc(L.aviso)}</span></div>` : ""}
+    ${!L.conIA && L.b64 ? `<button class="btn-ghost" type="button" data-act="lote-ia">${ic("i-scan")}¿Faltan o salieron mal? Leer mejor con IA</button>` : ""}
+    ${S.pareja ? `<div class="field"><span class="flabel">¿De quién son?</span><div class="type-toggle" role="group" aria-label="De quién son">
+      <button type="button" aria-pressed="${L.alcance === "propio"}" data-act="lote-alcance" data-v="propio">Míos</button>
+      <button type="button" aria-pressed="${L.alcance === "compartido"}" data-act="lote-alcance" data-v="compartido">De los dos</button></div></div>` : ""}
+    ${credito ? `<div class="field"><label for="l-tj">Tarjeta</label><div class="inp"><select id="l-tj" data-lote-tj><option value="">Sin tarjeta registrada</option>${tjs.map((t) => `<option value="${t.id}" ${t.id === L.tarjeta_id ? "selected" : ""}>${esc(t.nombre)} ••${esc(t.ultimos4)}</option>`).join("")}</select>${ic("i-down", 'style="width:16px;color:var(--muted)"')}</div></div>` : ""}
+    <div class="chips"><button class="chip" type="button" data-act="lote-todos" data-v="1">Marcar todos</button><button class="chip" type="button" data-act="lote-todos" data-v="0">Quitar todos</button>
+      <span class="muted num" style="font-size:13px;margin-left:auto;align-self:center;white-space:nowrap">Gastos: ${C.soles(total)}</span></div>
+    <div>${dias.map((d) => `<div class="day"><span>${C.etiquetaDia(d)}</span></div>${L.items.filter((x) => x.fecha === d).map((x) => {
+      const k = x.clase === "pago_tarjeta" ? { i: "i-card", c: "--brand" } : cat(x.categoria);
+      return `<div class="tx lote-row" style="${x.sel ? "" : "opacity:.5"}">
+        <button class="sw" type="button" role="switch" aria-checked="${x.sel}" aria-label="Guardar ${esc(x.comercio)}" data-act="lote-sel" data-i="${x.i}" style="width:44px;height:28px"></button>
+        <span class="mid"><input class="lote-name" data-lote-nom="${x.i}" value="${esc(x.comercio)}" placeholder="Sin nombre" aria-label="Nombre del movimiento" maxlength="80">
+          <small>${x.clase === "pago_tarjeta" ? "Pago de tarjeta" : `<span class="inp" style="min-height:0;padding:0 4px;border-radius:8px;display:inline-flex"><select data-lote-cat="${x.i}" style="font-size:12.5px;padding:2px 0;font-weight:600">${C.CATS_GASTO.map((c) => `<option value="${c}" ${x.categoria === c ? "selected" : ""}>${cat(c).n}</option>`).join("")}${x.tipo === "ingreso" ? `<option value="ingreso" selected>Ingreso</option>` : ""}</select></span>`}
+          ${x.dup ? `<span class="pill warn">Ya guardado</span>` : ""}${x.moneda === "USD" ? `<span class="pill warn">En dólares</span>` : ""}</small></span>
+        <span class="amt num ${x.tipo === "ingreso" ? "in" : ""}">${x.moneda === "USD" ? "US$ " : "S/ "}${C.r2(x.monto).toFixed(2)}</span></div>`; }).join("")}`).join("")}</div>
+    ${L.items.some((x) => x.moneda === "USD") ? `<span class="hint warn">Los movimientos en dólares no se guardan solos: pásalos a soles y agrégalos a mano.</span>` : ""}
+    ${S.error ? `<p class="err" role="alert">${esc(S.error)}</p>` : ""}
+  </div>
+  <div class="actions"><button class="secondary" type="button" data-act="lote-cancelar">Descartar</button>
+    <button class="primary" type="button" data-act="lote-guardar" ${sel.length ? "" : "disabled"}>${ic("i-check")}Guardar ${sel.length}</button></div></div>`;
+};
 
 P.movimientos = () => {
   const f = S.filtros, q = f.texto.trim().toLowerCase();
@@ -559,10 +589,16 @@ function armarBorrador(res, error, prep, conIA = false) {
       const tj = mv.ultimos4_tarjeta ? S.d.tarjetas.find((t) => t.ultimos4 === mv.ultimos4_tarjeta) : null;
       return itemVacio({ tipo: mv.tipo, monto: mv.monto, moneda: mv.moneda, fecha: /^\d{4}-\d{2}-\d{2}$/.test(mv.fecha) ? mv.fecha : C.hoyISO(), hora: mv.hora || "",
         comercio: mv.comercio, medio: C.MEDIOS.includes(mv.medio) ? mv.medio : "Otro", categoria: mv.categoria, n_operacion: mv.n_operacion, tarjeta_id: tj?.id || "",
-        conf: { ...mv.confianza, fecha: mv.fecha ? mv.confianza.fecha : "media" } });
+        clase: mv.clase || "normal", conf: { ...mv.confianza, fecha: mv.fecha ? mv.confianza.fecha : "media" } });
     });
     const nRevisar = items.filter((i) => Object.values(i.conf).some((c) => c !== "alta")).length;
     aviso = res.aviso || (items.length > 1 ? `Encontramos ${items.length} movimientos. Revísalos uno por uno.` : nRevisar ? "Revisa los datos marcados en ámbar." : "Leímos todos los datos. Revisa y guarda.");
+  }
+  if (!hayError && items.length > 1 && !S.preset) {
+    const tj = S.d.tarjetas.length === 1 ? S.d.tarjetas[0].id : "";
+    S.lote = { aviso, imagenUrl: prep.url, b64: prep.b64, conIA, alcance: "propio", tarjeta_id: tj,
+      items: items.map((it, i) => ({ ...it, sel: it.moneda !== "USD" && !C.buscarDuplicado(S.d.movimientos, { ...it, monto: C.r2(it.monto) }), dup: !!C.buscarDuplicado(S.d.movimientos, { ...it, monto: C.r2(it.monto) }), i })) };
+    S.borrador = null; ir("lote"); return;
   }
   S.borrador = { imagenBlob: prep.blob, imagenUrl: prep.url, b64: prep.b64, conIA, items: items.map(itemsDesdePreset), idx: 0, aviso, error: hayError, preset: S.preset, capturaPath: null };
   if (S.ruta === "revisar") render(); else ir("revisar");
@@ -606,6 +642,36 @@ A.filtro = (el) => {
 };
 A.stats = (el) => { S.statsModo = el.dataset.v; render(); };
 A["leer-ia"] = () => leerConIA();
+A["lote-ia"] = async () => {
+  const L = S.lote; if (!L?.b64) return;
+  S.leyendo = { url: L.imagenUrl, ia: true }; ir("adjuntar");
+  let res = null, error = null;
+  try { res = await api.leerCaptura(L.b64, "image/jpeg", C.hoyISO()); } catch (e) { error = e.message; }
+  S.leyendo = false;
+  if (error || !res?.movimientos?.length) { L.aviso = error || "La IA no encontró más movimientos."; L.conIA = true; ir("lote"); return; }
+  const items = res.movimientos.map((mv, i) => { const it = itemVacio({ tipo: mv.tipo, monto: mv.monto, moneda: mv.moneda, fecha: /^\d{4}-\d{2}-\d{2}$/.test(mv.fecha) ? mv.fecha : C.hoyISO(), comercio: mv.comercio,
+    medio: C.MEDIOS.includes(mv.medio) ? mv.medio : "Otro", categoria: mv.categoria, n_operacion: mv.n_operacion, clase: mv.clase || (/pago|abono/i.test(mv.comercio) && mv.tipo === "ingreso" ? "pago_tarjeta" : "normal") });
+    const dup = !!C.buscarDuplicado(S.d.movimientos, { ...it, monto: C.r2(it.monto) }); return { ...it, dup, sel: it.moneda !== "USD" && !dup, i }; });
+  Object.assign(L, { items, conIA: true, aviso: `La IA encontró ${items.length} movimientos.` }); ir("lote");
+};
+A["lote-sel"] = (el) => { const x = S.lote.items[+el.dataset.i]; x.sel = !x.sel; render(); };
+A["lote-todos"] = (el) => { S.lote.items.forEach((x) => (x.sel = el.dataset.v === "1" && x.moneda !== "USD")); render(); };
+A["lote-alcance"] = (el) => { S.lote.alcance = el.dataset.v; render(); };
+A["lote-cancelar"] = () => { S.lote = null; ir("inicio"); };
+A["lote-guardar"] = async (el) => {
+  const L = S.lote, yo = S.yo.user_id; const elegidos = L.items.filter((x) => x.sel); if (!elegidos.length) return;
+  el.disabled = true; S.error = ""; let n = 0;
+  try {
+    for (const x of elegidos) {
+      const pago = x.clase === "pago_tarjeta", credito = x.medio === "Tarjeta de crédito";
+      await guardarMov({ hogar_id: S.hogar.id, tipo: x.tipo, monto: C.r2(x.monto), fecha: x.fecha, hora: null, comercio: x.comercio, medio: x.medio, categoria: pago ? "otros" : x.categoria,
+        nota: "", n_operacion: x.n_operacion || null, alcance: pago ? "propio" : L.alcance, duenio: pago || L.alcance === "propio" ? yo : null, pagado_por: yo, privado: false,
+        clase: pago ? "pago_tarjeta" : "normal", tarjeta_id: (pago || credito) && L.tarjeta_id ? L.tarjeta_id : null, captura_path: null });
+      n++;
+    }
+    S.lote = null; toast(`${n} movimientos guardados`); ir("movimientos");
+  } catch (e) { S.error = `Se guardaron ${n} y falló uno: ${e.message}`; elegidos.slice(0, n).forEach((x) => { x.sel = false; x.dup = true; }); el.disabled = false; render(); }
+};
 A.manual = () => { S.borrador = { items: [itemsDesdePreset(itemVacio())], idx: 0, aviso: "", preset: S.preset, capturaPath: null }; ir("revisar"); };
 A.descartar = () => {
   const b = S.borrador;
@@ -799,11 +865,14 @@ document.addEventListener("click", (e) => {
   if (t.dataset.go) { if (t.dataset.go === "adjuntar" && !t.closest(".screen")?.querySelector("[data-drop]")) { if (!S.preset || t.closest(".tabbar")) S.preset = null; } ir(t.dataset.go); }
 });
 document.addEventListener("input", (e) => {
+  if (e.target.matches("[data-lote-nom]")) { S.lote.items[+e.target.dataset.loteNom].comercio = e.target.value; return; }
   if (e.target.matches("[data-buscar]")) { S.filtros.texto = e.target.value; const pos = e.target.selectionStart; render(); const i = document.getElementById("f-buscar"); i.focus(); i.setSelectionRange(pos, pos); }
   if (e.target.id === "f-monto") pintarReparto();
 });
 document.addEventListener("change", (e) => {
   if (e.target.matches("[data-file]")) { procesarArchivo(e.target.files[0]); e.target.value = ""; }
+  if (e.target.matches("[data-lote-cat]")) { S.lote.items[+e.target.dataset.loteCat].categoria = e.target.value; }
+  if (e.target.matches("[data-lote-tj]")) { S.lote.tarjeta_id = e.target.value; }
   if (e.target.matches("[data-medio]")) { const w = document.querySelector("[data-tarjeta]"); if (w) w.hidden = e.target.value !== "Tarjeta de crédito"; }
 });
 document.addEventListener("paste", (e) => {

@@ -110,8 +110,90 @@ function buscarComercio(lineas, tipoDoc) {
   return { comercio: "", conf: "baja" };
 }
 
+/* ---------------- listados (estado de cuenta, movimientos de tarjeta) ---------------- */
+const MESES_LARGO = "enero|febrero|marzo|abril|mayo|junio|julio|agosto|setiembre|septiembre|octubre|noviembre|diciembre";
+const NUM_MES = { enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7, agosto: 8, setiembre: 9, septiembre: 9, octubre: 10, noviembre: 11, diciembre: 12 };
+const RE_MONTO = /(S\s?\/\.?|US\$|\$)\s*([-−–—]?)\s*(\d{1,3}(?:[.,]\d{3})*[.,]\d{2}|\d+[.,]\d{2})/i;
+const RE_FECHA_DIA = new RegExp(`^\\s*(\\d{1,2})\\s*(?:de\\s+)?(${MESES_LARGO})(?:\\s+(?:de\\s+)?(\\d{4}))?\\s*$`, "i");
+const RE_CABECERA = new RegExp(`^\\s*(${MESES_LARGO})\\s+(\\d{4})\\s*$`, "i");
+
+function limpiarNombre(s) {
+  let n = s.replace(/[|_•©®™—–]+/g, " ").replace(/\s+/g, " ").trim();
+  n = n.replace(/^(?:[\[(<{]\s*[^\s\])>}]{0,3}\s*[\])>}]+|[\[(<{][^\s]{1,3})\s*/, "");                  // "(a)", "[>]", "(1d" del avatar
+  n = n.replace(/^(?:izi|dlc|pagsmilepe|culqi|niubiz|mp|ps|pp|vtex|rappi)\W+(?=\S{3})/i, "");          // prefijos de pasarela
+  n = n.replace(/\s+\W+$/, "");
+  n = n.replace(/^[^\wÁÉÍÓÚÑ]*(?:[A-Z0-9]\s+)(?=[A-Z0-9*])/i, (m) => (m.trim().length <= 2 ? "" : m)); // letra del avatar pegada
+  n = n.replace(/\s*(?:LIMA|CALLAO|SURCO|MIRAFLORES)?\s*(?:\.{2,}|…)\s*$/i, "")      // "LIMA..." al final
+       .replace(/\s+(?:LIMA|CALLAO|AREQUIPA|CUSCO|TRUJILLO)(?:\s+PE)?\s*$/i, "")
+       .replace(/\s+PE\s*$/, "");
+  const m = n.match(/^([A-Z0-9]{2,10})\*\s*(.+)$/i);                                  // IZI*CHIFA → CHIFA
+  if (m && m[2].length >= 3 && !/^(anthropic|google|apple|amazon|paypal|uber)$/i.test(m[1])) n = m[2];
+  n = n.replace(/\*\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+  return n.toLowerCase().replace(/(^|[\s/-])(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
+}
+
+function esLista(lineas) {
+  const fechas = lineas.filter((l) => RE_FECHA_DIA.test(l)).length;
+  const montos = lineas.filter((l) => RE_MONTO.test(l)).length;
+  return fechas >= 2 && montos >= 2;
+}
+
+function interpretarLista(t, lineas, hoy) {
+  const anioHoy = Number(hoy.slice(0, 4)), mesHoy = Number(hoy.slice(5, 7));
+  const esTarjeta = /tarjeta de cr[eé]dito|credit/i.test(t);
+  let anio = null, nombreSuelto = "";
+  const filas = []; let actual = { nombre: "", monto: null, fecha: null };
+  const cerrar = () => { if (actual.monto !== null && actual.fecha) { filas.push(actual); actual = { nombre: "", monto: null, fecha: null }; } };
+
+  for (const raw of lineas) {
+    const l = raw.trim(); if (l.length < 2) continue;
+    const cab = l.match(RE_CABECERA);
+    if (cab) { cerrar(); anio = Number(cab[2]); continue; }
+    const fd = l.match(RE_FECHA_DIA);
+    if (fd) {
+      if (actual.fecha && actual.monto !== null) cerrar();
+      const mes = NUM_MES[fd[2].toLowerCase()]; let y = fd[3] ? Number(fd[3]) : (anio || anioHoy);
+      if (!fd[3] && !anio && mes > mesHoy) y = anioHoy - 1;
+      actual.fecha = `${y}-${pad(mes)}-${pad(fd[1])}`; cerrar(); continue;
+    }
+    const mm = l.match(RE_MONTO);
+    if (mm) {
+      if (actual.monto !== null && actual.fecha) cerrar();
+      if (actual.monto !== null) { actual = { nombre: "", monto: null, fecha: actual.fecha }; }
+      const resto = l.replace(RE_MONTO, " ");
+      actual.monto = aNumero(mm[3]); actual.signo = mm[2] ? "-" : ""; actual.usd = /\$/.test(mm[1]) && !/S\s?\//i.test(mm[1]);
+      const nom = limpiarNombre(resto);
+      if (nom.length >= 3) actual.nombre = nom; else if (nombreSuelto) { actual.nombre = nombreSuelto; }
+      nombreSuelto = ""; cerrar(); continue;
+    }
+    if (/[A-Za-zÁÉÍÓÚÑ]{3}/.test(l) && !/tarjeta de cr|movimientos|saldo|disponible|filtrar|buscar/i.test(l)) {
+      const nom = limpiarNombre(l);
+      if (nom.length >= 3) { if (actual.monto !== null && !actual.nombre) actual.nombre = nom; else nombreSuelto = nom; if (actual.monto !== null) cerrar(); }
+    }
+  }
+  const movimientos = filas.filter((f) => f.monto > 0).map((f) => {
+    const nombre = f.nombre || "Sin nombre";
+    const pago = /pago|abono|dep[oó]sito|devoluci/i.test(nombre) && f.signo !== "-";
+    const devol = pago && /devoluci/i.test(nombre);
+    const categoria = pago ? "otros" : (CATEGORIAS.find(([, re]) => re.test(nombre))?.[0] || "otros");
+    return {
+      tipo: devol ? "ingreso" : "gasto", monto: f.monto, moneda: f.usd ? "USD" : "PEN", fecha: f.fecha, hora: "",
+      comercio: nombre, medio: esTarjeta ? "Tarjeta de crédito" : "Otro", categoria: devol ? "ingreso" : categoria,
+      n_operacion: "", ultimos4_tarjeta: "", cuotas: 1, clase: pago && !devol ? "pago_tarjeta" : "normal",
+      confianza: { monto: "alta", fecha: "alta", comercio: f.nombre ? "media" : "baja" },
+    };
+  });
+  return {
+    legible: movimientos.length > 0, tipo_documento: "estado_de_cuenta",
+    aviso: movimientos.length ? `Encontramos ${movimientos.length} movimientos en el listado. Revisa y guarda los que quieras.` : "",
+    movimientos, texto: t, lista: true,
+  };
+}
+
 export function interpretar(texto, hoy) {
   const t = texto.replace(/\r/g, "");
+  const lineasL = t.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (esLista(lineasL)) { const r = interpretarLista(t, lineasL, hoy); if (r.legible) return r; }
   const lineas = t.split("\n").map((l) => l.trim()).filter(Boolean);
   const tipoDoc = /yape/i.test(t) ? "yape" : /plin/i.test(t) ? "plin"
     : /estado de cuenta|movimientos del|saldo anterior/i.test(t) ? "estado_de_cuenta"
